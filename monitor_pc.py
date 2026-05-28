@@ -81,7 +81,6 @@ def ping_worker():
     """
     global ping_latency, local_ip
     while True:
-        # 1. Update Local IP Address
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -90,7 +89,6 @@ def ping_worker():
         except Exception:
             local_ip = "127.0.0.1"
 
-        # 2. Update Ping Latency via TCP connect to port 53 (DNS)
         try:
             t0 = time.time()
             s = socket.create_connection(("8.8.8.8", 53), timeout=1.5)
