@@ -240,8 +240,22 @@ def _apply_fill_to_chart(
     RESET  = "\x1b[0m"
     BOLD   = "\x1b[1m"
     DIM    = "\x1b[2m"
-    color_ansi = {"green": "\x1b[32m", "yellow": "\x1b[33m", "red": "\x1b[31m"}
+    
+    color_ansi = {
+        "green": "\x1b[32m",
+        "yellow": "\x1b[33m",
+        "red": "\x1b[31m",
+        "cyan": "\x1b[36m"
+    }
+    color_ansi_dim = {
+        "green": "\x1b[2;32m",
+        "yellow": "\x1b[2;33m",
+        "red": "\x1b[2;31m",
+        "cyan": "\x1b[2;36m"
+    }
+    
     ansi_clr   = color_ansi.get(rich_color, "\x1b[32m")
+    ansi_dim   = color_ansi_dim.get(rich_color, "\x1b[2;32m")
 
     n_rows = len(lines)
     if n_rows < 2:
@@ -254,7 +268,6 @@ def _apply_fill_to_chart(
     span   = max_val - min_val if max_val != min_val else 1.0
     n_data = max(len(data), 1)
 
-    
     line_row_frac: list = []
     for col in range(n_cols_body):
         t   = col / max(n_cols_body - 1, 1)
@@ -263,7 +276,6 @@ def _apply_fill_to_chart(
         val = data[lo] * (1.0 - (di - lo)) + data[hi] * (di - lo)
         norm = max(0.0, min(1.0, (val - min_val) / span))
         line_row_frac.append((1.0 - norm) * (n_rows - 1))
-
 
     bottom_frac = float(n_rows - 1)
 
@@ -279,6 +291,8 @@ def _apply_fill_to_chart(
     new_lines = []
     for row_idx, (orig, clean) in enumerate(zip(lines, clean_lines)):
         prefix   = _prefix_orig(orig, y_prefix)
+        colored_prefix = f"{ansi_dim}{prefix}{RESET}"
+        
         body     = clean[y_prefix:].ljust(n_cols_body)
         new_body = ""
 
@@ -292,20 +306,21 @@ def _apply_fill_to_chart(
             fill_end   = bottom_frac                 
 
             if fill_start <= row_idx <= fill_end:
-                AXIS_CHARS = set("┼┤─╮╭╯╰│")
-                if ch in AXIS_CHARS:
-                    new_body += ch 
-                else:
-                    fill_height = max(fill_end - fill_start, 1.0)
-                    depth       = (row_idx - fill_start) / fill_height
-                    depth       = max(0.0, min(1.0, depth))
-                    fill_ch     = _fill_char_for_depth(depth)
-                    shade       = BOLD if depth < 0.25 else (DIM if depth > 0.70 else "")
-                    new_body   += f"{shade}{ansi_clr}{fill_ch}{RESET}"
+                # Fill area: Smooth gradient solid blocks
+                fill_height = max(fill_end - fill_start, 1.0)
+                depth       = (row_idx - fill_start) / fill_height
+                depth       = max(0.0, min(1.0, depth))
+                fill_ch     = _fill_char_for_depth(depth)
+                shade       = BOLD if depth < 0.25 else (DIM if depth > 0.70 else "")
+                new_body   += f"{shade}{ansi_clr}{fill_ch}{RESET}"
             else:
-                new_body += ch
+                # Curve line or above: Color the curve characters explicitly
+                if ch != " ":
+                    new_body += f"{ansi_clr}{ch}{RESET}"
+                else:
+                    new_body += ch
 
-        new_lines.append(prefix + new_body)
+        new_lines.append(colored_prefix + new_body)
 
     return new_lines
 
@@ -355,9 +370,18 @@ def build_chart(
 
     lines = _apply_fill_to_chart(lines, data, y_prefix, 0.0, max_val, rich_color)
 
+    color_ansi_dim = {
+        "green": "\x1b[2;32m",
+        "yellow": "\x1b[2;33m",
+        "red": "\x1b[2;31m",
+        "cyan": "\x1b[2;36m"
+    }
+    ansi_dim = color_ansi_dim.get(rich_color, "\x1b[2;32m")
+    RESET  = "\x1b[0m"
+
     body_w = len(data)
     gap    = max(0, body_w - 10)
-    xaxis  = " " * y_prefix + "60s ago" + " " * gap + "now"
+    xaxis  = " " * y_prefix + f"{ansi_dim}60s ago{RESET}" + " " * gap + f"{ansi_dim}now{RESET}"
 
     raw = "\n".join(lines) + "\n" + xaxis
     result = Text.from_ansi(raw)
@@ -475,10 +499,10 @@ def build_cpu_panel(stats: dict) -> Panel:
     c.add_column()
 
     hdr = Text()
-    hdr.append("  CPU  ", style="bold white")
+    hdr.append("  CPU  ", style="bold grey85")
     hdr.append(f"{cpu:.1f}%", style=f"bold {color}")
     if stats.get("cpu_freq"):
-        hdr.append(f"  │  {stats['cpu_freq']:.0f} MHz", style="dim")
+        hdr.append(f"  │  {stats['cpu_freq']:.0f} MHz", style="grey50")
     c.add_row(hdr)
     c.add_row(Text(""))
 
@@ -488,7 +512,7 @@ def build_cpu_panel(stats: dict) -> Panel:
     if cores:
         ct = Text("\n  ")
         for i, cp in enumerate(cores):
-            ct.append(f"C{i}:", style="dim")
+            ct.append(f"C{i}:", style="grey50")
             ct.append(f"{cp:4.0f}% ", style=get_rich_color(cp))
             if (i + 1) % 6 == 0 and i < len(cores) - 1:
                 ct.append("\n  ")
@@ -506,11 +530,11 @@ def build_ram_panel(stats: dict) -> Panel:
     c.add_column()
 
     hdr = Text()
-    hdr.append("  RAM  ", style="bold white")
+    hdr.append("  RAM  ", style="bold grey85")
     hdr.append(f"{ram:.1f}%", style=f"bold {color}")
     hdr.append(
         f"  │  {format_bytes(stats['ram_used'])} / {format_bytes(stats['ram_total'])}",
-        style="dim"
+        style="grey50"
     )
     c.add_row(hdr)
     c.add_row(Text(""))
@@ -518,7 +542,7 @@ def build_ram_panel(stats: dict) -> Panel:
     c.add_row(build_chart(ram_history, current_val=ram, height=dynamic_graph_height))
 
     detail = Text("\n  ")
-    detail.append("Available: ", style="dim")
+    detail.append("Available: ", style="grey50")
     detail.append(format_bytes(stats["ram_available"]), style="bold green")
     c.add_row(detail)
 
@@ -538,7 +562,7 @@ def build_network_panel(stats: dict) -> Panel:
     hdr = Text()
     hdr.append("  ↓ ", style="bold bright_green")
     hdr.append(format_speed(dl), style="bold bright_green")
-    hdr.append("  │  ↑ ", style="dim")
+    hdr.append("  │  ↑ ", style="grey50")
     hdr.append(format_speed(ul), style="bold cyan")
     c.add_row(hdr)
     c.add_row(Text(""))
@@ -547,9 +571,9 @@ def build_network_panel(stats: dict) -> Panel:
                           max_val=scaled_max, is_speed=True, height=dynamic_graph_height))
 
     total = Text("\n  ")
-    total.append("Σ Recv: ", style="dim")
+    total.append("Σ Recv: ", style="grey50")
     total.append(format_bytes(stats["net_recv_total"]), style="cyan")
-    total.append("  Σ Sent: ", style="dim")
+    total.append("  Σ Sent: ", style="grey50")
     total.append(format_bytes(stats["net_sent_total"]), style="cyan")
     c.add_row(total)
 
@@ -567,11 +591,11 @@ def build_disk_panel(stats: dict) -> Panel:
     c.add_column()
 
     hdr = Text()
-    hdr.append("  Disk  ", style="bold white")
+    hdr.append("  Disk  ", style="bold grey85")
     hdr.append(f"{pct:.1f}%", style=f"bold {color}")
     hdr.append(
         f"  │  {format_bytes(stats['disk_used'])} / {format_bytes(stats['disk_total'])}",
-        style="dim"
+        style="grey50"
     )
     c.add_row(hdr)
     c.add_row(Text(""))
@@ -585,9 +609,9 @@ def build_disk_panel(stats: dict) -> Panel:
     c.add_row(Text(""))
 
     speeds = Text()
-    speeds.append("  Read: ", style="dim")
+    speeds.append("  Read: ", style="grey50")
     speeds.append(format_speed(read_speed), style="bold bright_green")
-    speeds.append("  │  Write: ", style="dim")
+    speeds.append("  │  Write: ", style="grey50")
     speeds.append(format_speed(write_speed), style="bold cyan")
     c.add_row(speeds)
     c.add_row(Text(""))
@@ -612,28 +636,28 @@ def build_system_panel(stats: dict) -> Panel:
     ping_style = "bold yellow" if "ms" in ping_latency else "bold red"
 
     for label, val, style in [
-        ("  Hostname",  stats["hostname"],          "bold white"),
-        ("  OS",        stats["os_info"],            "white"),
-        ("  Python",    stats["python_version"],     "white"),
-        ("  CPU",       stats["cpu_name"],           "white"),
-        ("  Cores",     f"{stats['cpu_cores_physical']}P / {stats['cpu_cores_logical']}L", "white"),
+        ("  Hostname",  stats["hostname"],          "bold grey85"),
+        ("  OS",        stats["os_info"],            "grey85"),
+        ("  Python",    stats["python_version"],     "grey85"),
+        ("  CPU",       stats["cpu_name"],           "grey85"),
+        ("  Cores",     f"{stats['cpu_cores_physical']}P / {stats['cpu_cores_logical']}L", "grey85"),
         ("  Uptime",    format_uptime(stats["boot_time"]),   "bold magenta"),
         ("  Processes", str(stats["process_count"]),          "bold cyan"),
         ("  Local IP",  local_ip,                    "bold green"),
         ("  Ping (8.8.8.8)", ping_latency,           ping_style),
     ]:
-        t.add_row(Text(label, style="dim"), Text(val, style=style))
+        t.add_row(Text(label, style="grey50"), Text(val, style=style))
 
     if stats["battery_percent"] is not None:
         bc      = get_rich_color(100 - stats["battery_percent"])
         plugged = "⚡ Plugged In" if stats.get("battery_plugged") else "🔋 On Battery"
         t.add_row(
-            Text("  Battery", style="dim"),
+            Text("  Battery", style="grey50"),
             Text(f"{stats['battery_percent']:.0f}%  {plugged}  {stats.get('battery_time','')}",
                  style=f"bold {bc}"),
         )
     else:
-        t.add_row(Text("  Battery", style="dim"), Text("Not available", style="dim italic"))
+        t.add_row(Text("  Battery", style="grey50"), Text("Not available", style="grey50 italic"))
 
     return Panel(t, title="[bold magenta]⊞ System Info[/bold magenta]",
                  border_style="magenta", padding=(0, 1))
@@ -648,7 +672,7 @@ def build_processes_panel() -> Panel:
     t.add_column(min_width=24)
 
     cpu_t = Table(title="Top CPU Processes", show_header=True, header_style="bold green", box=None, padding=(0, 1))
-    cpu_t.add_column("PID", style="dim", width=6)
+    cpu_t.add_column("PID", style="grey50", width=6)
     cpu_t.add_column("Name", width=10)
     cpu_t.add_column("CPU", justify="right", style="bold green", width=6)
 
@@ -659,7 +683,7 @@ def build_processes_panel() -> Panel:
         cpu_t.add_row("-", "Scanning...", "-")
 
     ram_t = Table(title="Top Memory Processes", show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
-    ram_t.add_column("PID", style="dim", width=6)
+    ram_t.add_column("PID", style="grey50", width=6)
     ram_t.add_column("Name", width=10)
     ram_t.add_column("RAM", justify="right", style="bold cyan", width=8)
 
