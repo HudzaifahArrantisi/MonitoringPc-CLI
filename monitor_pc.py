@@ -5,10 +5,6 @@
 ║     Realtime PC Dashboard — Task Manager Style Graphs       ║
 ╚══════════════════════════════════════════════════════════════╝
 
-Graph smooth ala Task Manager menggunakan asciichartpy.
-Kurva melengkung (╭─╮ ╰─╯) — tidak kotak-kotak, tidak titik-titik.
-Warna otomatis: hijau → kuning → merah sesuai beban.
-
 Usage:
     python monitor_pc.py
 
@@ -214,6 +210,106 @@ def auto_scale(max_val: float) -> float:
 
 
 
+def _fill_char_for_depth(depth: float) -> str:
+    """depth 0=just below line, 1=bottom. Denser toward bottom."""
+    if depth < 0.20:
+        return "░"
+    elif depth < 0.45:
+        return "▒"
+    elif depth < 0.70:
+        return "▓"
+    else:
+        return "█"
+
+
+def _apply_fill_to_chart(
+    lines: list,
+    data: list,
+    y_prefix: int,
+    min_val: float,
+    max_val: float,
+    rich_color: str,
+) -> list:
+    """
+    Add a gradient fill STRICTLY below the graph line and STRICTLY above the
+    bottom baseline row (the row that shows the 0% / min label).
+
+    Uses the original numeric data to compute per-column fill thresholds via
+    linear interpolation — no ASCII glyph parsing needed.
+    """
+    RESET  = "\x1b[0m"
+    BOLD   = "\x1b[1m"
+    DIM    = "\x1b[2m"
+    color_ansi = {"green": "\x1b[32m", "yellow": "\x1b[33m", "red": "\x1b[31m"}
+    ansi_clr   = color_ansi.get(rich_color, "\x1b[32m")
+
+    n_rows = len(lines)
+    if n_rows < 2:
+        return lines
+
+    clean_lines = [_ANSI_RE.sub("", l) for l in lines]
+
+    n_cols_body = len(data)
+
+    span   = max_val - min_val if max_val != min_val else 1.0
+    n_data = max(len(data), 1)
+
+    
+    line_row_frac: list = []
+    for col in range(n_cols_body):
+        t   = col / max(n_cols_body - 1, 1)
+        di  = t * (n_data - 1)
+        lo  = int(di);  hi = min(lo + 1, n_data - 1)
+        val = data[lo] * (1.0 - (di - lo)) + data[hi] * (di - lo)
+        norm = max(0.0, min(1.0, (val - min_val) / span))
+        line_row_frac.append((1.0 - norm) * (n_rows - 1))
+
+
+    bottom_frac = float(n_rows - 1)
+
+    def _prefix_orig(orig: str, n_vis: int) -> str:
+        count = 0;  i = 0
+        while i < len(orig) and count < n_vis:
+            if orig[i] == "\x1b":
+                j = orig.find("m", i);  i = (j + 1) if j != -1 else len(orig)
+            else:
+                count += 1;  i += 1
+        return orig[:i]
+
+    new_lines = []
+    for row_idx, (orig, clean) in enumerate(zip(lines, clean_lines)):
+        prefix   = _prefix_orig(orig, y_prefix)
+        body     = clean[y_prefix:].ljust(n_cols_body)
+        new_body = ""
+
+        for col_offset, ch in enumerate(body):
+            if col_offset >= len(line_row_frac):
+                new_body += ch
+                continue
+
+            line_frac  = line_row_frac[col_offset] 
+            fill_start = line_frac + 0.5              
+            fill_end   = bottom_frac                 
+
+            if fill_start <= row_idx <= fill_end:
+                AXIS_CHARS = set("┼┤─╮╭╯╰│")
+                if ch in AXIS_CHARS:
+                    new_body += ch 
+                else:
+                    fill_height = max(fill_end - fill_start, 1.0)
+                    depth       = (row_idx - fill_start) / fill_height
+                    depth       = max(0.0, min(1.0, depth))
+                    fill_ch     = _fill_char_for_depth(depth)
+                    shade       = BOLD if depth < 0.25 else (DIM if depth > 0.70 else "")
+                    new_body   += f"{shade}{ansi_clr}{fill_ch}{RESET}"
+            else:
+                new_body += ch
+
+        new_lines.append(prefix + new_body)
+
+    return new_lines
+
+
 def build_chart(
     history,
     current_val: float = 0.0,
@@ -230,6 +326,7 @@ def build_chart(
 
     pct_now = (current_val / max_val * 100) if is_speed else current_val
     color   = get_acp_color(pct_now)
+    rich_color = get_rich_color(pct_now)
 
     if is_speed:
         label_fmt = "{:6.0f}"
@@ -247,18 +344,34 @@ def build_chart(
     raw   = acp.plot(data, cfg)
     lines = raw.rstrip("\n").split("\n")
 
-    visual_widths  = [len(_ANSI_RE.sub("", l)) for l in lines]
-    max_visual_w   = max(visual_widths)
+    y_prefix = 8  
+    if lines:
+        clean_first = _ANSI_RE.sub("", lines[0])
+        for tick in ("┼", "┤"):
+            idx = clean_first.find(tick)
+            if idx != -1:
+                y_prefix = idx + 1
+                break
 
-    short_w_list = [w for w in visual_widths if w < 20]
-    y_prefix     = short_w_list[0] if short_w_list else 8
+    lines = _apply_fill_to_chart(lines, data, y_prefix, 0.0, max_val, rich_color)
 
-    body_w = max_visual_w - y_prefix
+    body_w = len(data)
     gap    = max(0, body_w - 10)
     xaxis  = " " * y_prefix + "60s ago" + " " * gap + "now"
 
-    raw += "\n" + xaxis
-    return Text.from_ansi(raw)
+    raw = "\n".join(lines) + "\n" + xaxis
+    result = Text.from_ansi(raw)
+
+    trend = "→"
+    if len(data) >= 2:
+        if data[-1] > data[-2]:
+            trend = "↑"
+        elif data[-1] < data[-2]:
+            trend = "↓"
+
+    result.append("  ")
+    result.append(trend, style=f"bold {rich_color}")
+    return result
 
 
 
